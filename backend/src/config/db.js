@@ -1,26 +1,42 @@
 import mongoose from 'mongoose';
 
-let connectionPromise;
+const cacheKey = Symbol.for("vibetalk.mongoose.cache");
+const cache = (globalThis[cacheKey] ??= { connection: null, promise: null });
 
 export const connectDB = async () => {
-  if (mongoose.connection.readyState === 1) return mongoose.connection;
   if (!process.env.MONGO_URI) {
     throw new Error("MONGO_URI must be set in the environment");
   }
 
-  if (!connectionPromise) {
-    connectionPromise = mongoose
-      .connect(process.env.MONGO_URI)
+  if (mongoose.connection.readyState === 1) {
+    cache.connection = mongoose.connection;
+    return cache.connection;
+  }
+
+  if (
+    (mongoose.connection.readyState === 0 ||
+      mongoose.connection.readyState === 3) &&
+    cache.connection
+  ) {
+    cache.connection = null;
+    cache.promise = null;
+  }
+
+  if (!cache.promise) {
+    cache.promise = mongoose
+      .connect(process.env.MONGO_URI, { maxPoolSize: 5 })
       .then((connection) => {
-        console.log(`MongoDB connected: ${connection.connection.host}`);
-        return connection.connection;
+        cache.connection = connection.connection;
+        console.info("MongoDB connection established for this function instance.");
+        return cache.connection;
       })
       .catch((error) => {
-        connectionPromise = undefined;
+        cache.connection = null;
+        cache.promise = null;
         console.error("MongoDB connection failed:", error);
         throw error;
       });
   }
 
-  return connectionPromise;
+  return cache.promise;
 };
