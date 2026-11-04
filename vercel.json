@@ -7,7 +7,13 @@
     },
     "vite-project": {
       "root": "frontend/vite-project",
-      "framework": "vite"
+      "framework": "vite",
+      "rewrites": [
+        {
+          "source": "/(.*)",
+          "destination": "/"
+        }
+      ]
     }
   },
   "rewrites": [
