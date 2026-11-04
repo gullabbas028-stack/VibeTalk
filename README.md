@@ -17,11 +17,6 @@ Configure these environment variables in the Vercel project before deploying:
 - `JWT_SECRET`
 - `STREAM_API_KEY`
 - `STREAM_API_SECRET`
-- `CRON_SECRET` (use a long, random value to protect the scheduled email retry
-  endpoint)
 
 Email notifications are optional. To enable them, also set `RESEND_API_KEY` and
 `RESEND_FROM_EMAIL`.
-
-Vercel Cron invokes `/api/cron/email-retries` once per minute. Configure the
-same `CRON_SECRET` in Vercel so the endpoint can authenticate scheduled calls.

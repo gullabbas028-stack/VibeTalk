@@ -23,11 +23,5 @@
         "service": "vite-project"
       }
     }
-  ],
-  "crons": [
-    {
-      "path": "/api/cron/email-retries",
-      "schedule": "* * * * *"
-    }
   ]
 }

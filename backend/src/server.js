@@ -6,7 +6,6 @@ import cookieParser from 'cookie-parser'; // Import cookie-parser middleware
 import userRouter from './routes/userRoutes.js';
 import chatRouter from './routes/chatRouter.js';
 import notificationRouter from './routes/notificationRoutes.js';
-import cronRouter from './routes/cronRoutes.js';
 import { startNotificationWorker } from './services/notificationService.js';
 import cors from 'cors';
 
@@ -21,7 +20,6 @@ app.use(cors({
 app.use(express.json()); // Parse incoming JSON requests
 app.use(cookieParser()); //  cookies from  middleware incoming requests
 
-app.use('/api/cron', cronRouter);
 app.use(async (_req, _res, next) => {
   try {
     await connectDB();

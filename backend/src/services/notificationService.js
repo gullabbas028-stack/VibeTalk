@@ -182,8 +182,16 @@ const processEmailNotification = async (notificationId) => {
   }
 };
 
-const scheduleEmailDelivery = (notificationId) => {
-  if (process.env.VERCEL) return;
+const scheduleEmailDelivery = async (notificationId) => {
+  if (process.env.VERCEL) {
+    try {
+      await processEmailNotification(notificationId);
+    } catch (error) {
+      console.error("Could not process email notification:", error);
+    }
+    return;
+  }
+
   setImmediate(() => {
     processEmailNotification(notificationId).catch((error) => {
       console.error("Could not process email notification:", error);
@@ -247,7 +255,7 @@ export const createNotification = async ({
     },
   });
 
-  if (emailStatus === "pending") scheduleEmailDelivery(notification._id);
+  if (emailStatus === "pending") await scheduleEmailDelivery(notification._id);
   return notification;
 };
 
@@ -270,7 +278,7 @@ export const retryNotificationEmail = async (notificationId) => {
       },
     },
   );
-  scheduleEmailDelivery(notificationId);
+  await scheduleEmailDelivery(notificationId);
 };
 
 let retryTimer;
