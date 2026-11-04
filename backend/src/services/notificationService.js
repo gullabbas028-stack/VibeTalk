@@ -183,6 +183,7 @@ const processEmailNotification = async (notificationId) => {
 };
 
 const scheduleEmailDelivery = (notificationId) => {
+  if (process.env.VERCEL) return;
   setImmediate(() => {
     processEmailNotification(notificationId).catch((error) => {
       console.error("Could not process email notification:", error);
@@ -275,27 +276,36 @@ export const retryNotificationEmail = async (notificationId) => {
 let retryTimer;
 let workerRunning = false;
 
+export const processDueNotificationEmails = async () => {
+  if (!isEmailConfigured()) {
+    return { processed: 0, emailConfigured: false };
+  }
+
+  const dueNotifications = await Notification.find({
+    "channels.email.status": "pending",
+    "channels.email.attempts": { $lt: 3 },
+    $or: [
+      { "channels.email.nextAttemptAt": null },
+      { "channels.email.nextAttemptAt": { $lte: new Date() } },
+    ],
+  })
+    .select("_id")
+    .limit(25)
+    .lean();
+
+  await Promise.all(
+    dueNotifications.map(({ _id }) => processEmailNotification(_id)),
+  );
+  return { processed: dueNotifications.length, emailConfigured: true };
+};
+
 export const startNotificationWorker = () => {
   if (retryTimer) return;
   retryTimer = setInterval(async () => {
     if (workerRunning || !isEmailConfigured()) return;
     workerRunning = true;
     try {
-      const dueNotifications = await Notification.find({
-        "channels.email.status": "pending",
-        "channels.email.attempts": { $lt: 3 },
-        $or: [
-          { "channels.email.nextAttemptAt": null },
-          { "channels.email.nextAttemptAt": { $lte: new Date() } },
-        ],
-      })
-        .select("_id")
-        .limit(25)
-        .lean();
-
-      await Promise.all(
-        dueNotifications.map(({ _id }) => processEmailNotification(_id)),
-      );
+      await processDueNotificationEmails();
     } catch (error) {
       console.error("Notification retry worker failed:", error);
     } finally {

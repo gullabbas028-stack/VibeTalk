@@ -6,15 +6,12 @@ import cookieParser from 'cookie-parser'; // Import cookie-parser middleware
 import userRouter from './routes/userRoutes.js';
 import chatRouter from './routes/chatRouter.js';
 import notificationRouter from './routes/notificationRoutes.js';
+import cronRouter from './routes/cronRoutes.js';
 import { startNotificationWorker } from './services/notificationService.js';
 import cors from 'cors';
 
 const app = express();//initialize express app hova ha 
 const PORT = process.env.PORT || 3000;// Set the port for the server
-
-// Connect to MongoDB
-await connectDB();
-startNotificationWorker();
 
 // middleware ka setup
 app.use(cors({
@@ -24,15 +21,27 @@ app.use(cors({
 app.use(express.json()); // Parse incoming JSON requests
 app.use(cookieParser()); //  cookies from  middleware incoming requests
 
+app.use('/api/cron', cronRouter);
+app.use(async (_req, _res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
 
-
-// Define your routes here
-app.use('/api/auth', authRouter); //ma ny jo auth routes ko /api/auth ke under use kar rahe hain
-app.use('/api/user' , userRouter); //ma ny jo user routes ko /api/user ke under use kar rahe hain
-app.use('/api/chat' , chatRouter);  // chat ka leya video call ka leya 
+app.use('/api/auth', authRouter);
+app.use('/api/user', userRouter);
+app.use('/api/chat', chatRouter);
 app.use('/api/notifications', notificationRouter);
 
+if (!process.env.VERCEL) {
+  await connectDB();
+  startNotificationWorker();
+  app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+  });
+}
 
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+export default app;
