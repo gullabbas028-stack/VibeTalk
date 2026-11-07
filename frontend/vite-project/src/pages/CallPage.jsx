@@ -19,13 +19,34 @@ const EMPTY_FRIENDS = [];
 const isCurrentCallLifecycle = (lifecycleRef, lifecycle) =>
   lifecycleRef.current === lifecycle;
 
-const CallStatus = ({ mode, friendName, ringOutcome }) => {
+const CallStatus = ({ call, mode, friendName, ringOutcome }) => {
   const { useCallCallingState, useParticipants } = useCallStateHooks();
   const callingState = useCallCallingState();
   const participants = useParticipants();
   const hasRemoteParticipant = participants.some(
     (participant) => !participant.isLocalParticipant,
   );
+  const [remoteDisconnected, setRemoteDisconnected] = useState(false);
+
+  useEffect(() => {
+    const unsubscribeLeft = call.on("call.session_participant_left", (event) => {
+      if (event.participant.user?.id !== call.currentUserId) {
+        setRemoteDisconnected(true);
+      }
+    });
+    const unsubscribeJoined = call.on(
+      "call.session_participant_joined",
+      (event) => {
+        if (event.participant.user?.id !== call.currentUserId) {
+          setRemoteDisconnected(false);
+        }
+      },
+    );
+    return () => {
+      unsubscribeLeft();
+      unsubscribeJoined();
+    };
+  }, [call]);
   const status = ringOutcome
     ? ringOutcome === "missed"
       ? "Call missed"
@@ -33,7 +54,9 @@ const CallStatus = ({ mode, friendName, ringOutcome }) => {
     : callingState === CallingState.JOINED
       ? hasRemoteParticipant
         ? "Connected"
-        : `Ringing ${friendName}...`
+        : remoteDisconnected
+          ? "Disconnected"
+          : `Ringing ${friendName}...`
       : callingState === CallingState.RECONNECTING ||
           callingState === CallingState.MIGRATING
         ? "Reconnecting..."
@@ -50,7 +73,7 @@ const CallStatus = ({ mode, friendName, ringOutcome }) => {
   return (
     <div className="video-call-status">
       <span
-        className={`video-call-status-indicator${ringOutcome ? " is-outcome" : ""}`}
+        className={`video-call-status-indicator${ringOutcome || status === "Disconnected" ? " is-outcome" : ""}`}
       />
       <span>{status}</span>
     </div>
@@ -133,6 +156,7 @@ const CallRoom = ({ call, friend, friendId, mode, ringOutcome }) => {
               <span>VibeTalk</span>
             </Link>
             <CallStatus
+              call={call}
               mode={mode}
               friendName={friend?.fullName || "your connection"}
               ringOutcome={ringOutcome}
