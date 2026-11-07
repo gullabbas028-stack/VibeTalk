@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  CallStatsButton,
   CallControls,
   CallingState,
   SpeakerLayout,
@@ -19,21 +20,32 @@ const isCurrentCallLifecycle = (lifecycleRef, lifecycle) =>
   lifecycleRef.current === lifecycle;
 
 const CallStatus = ({ mode, friendName, ringOutcome }) => {
-  const { useCallCallingState } = useCallStateHooks();
+  const { useCallCallingState, useParticipants } = useCallStateHooks();
   const callingState = useCallCallingState();
+  const participants = useParticipants();
+  const hasRemoteParticipant = participants.some(
+    (participant) => !participant.isLocalParticipant,
+  );
   const status = ringOutcome
     ? ringOutcome === "missed"
       ? "Call missed"
       : "Call rejected"
     : callingState === CallingState.JOINED
-      ? "Connected"
-      : callingState === CallingState.RECONNECTING
+      ? hasRemoteParticipant
+        ? "Connected"
+        : `Ringing ${friendName}...`
+      : callingState === CallingState.RECONNECTING ||
+          callingState === CallingState.MIGRATING
         ? "Reconnecting..."
         : callingState === CallingState.RINGING
-          ? `Calling ${friendName}...`
+          ? `Ringing ${friendName}...`
           : callingState === CallingState.JOINING
-            ? "Joining call..."
-            : `${mode === "audio" ? "Audio" : "Video"} call`;
+            ? "Connecting..."
+            : callingState === CallingState.RECONNECTING_FAILED ||
+                callingState === CallingState.OFFLINE ||
+                callingState === CallingState.LEFT
+              ? "Disconnected"
+              : `${mode === "audio" ? "Audio" : "Video"} call`;
 
   return (
     <div className="video-call-status">
@@ -45,17 +57,51 @@ const CallStatus = ({ mode, friendName, ringOutcome }) => {
   );
 };
 
+const SwitchCameraButton = ({ call, mode }) => {
+  const [switching, setSwitching] = useState(false);
+  if (mode !== "video") return null;
+
+  const switchCamera = async () => {
+    setSwitching(true);
+    try {
+      await call.camera.flip();
+    } catch (error) {
+      console.error("Could not switch cameras:", error);
+      toast.error("Could not switch cameras on this device.");
+    } finally {
+      setSwitching(false);
+    }
+  };
+
+  return (
+    <button
+      className="video-call-camera-switch"
+      type="button"
+      onClick={switchCamera}
+      disabled={switching}
+      aria-label="Switch camera"
+    >
+      {switching ? "Switching..." : "Switch camera"}
+    </button>
+  );
+};
+
 const CallRoom = ({ call, friend, friendId, mode, ringOutcome }) => {
   const navigate = useNavigate();
   const backToChat = () =>
     navigate(friendId ? `/chat?friend=${encodeURIComponent(friendId)}` : "/");
   const lifecycleRef = useRef(0);
+  const leavingRef = useRef(false);
 
   useEffect(() => {
     const lifecycle = ++lifecycleRef.current;
     return () => {
       queueMicrotask(() => {
-        if (isCurrentCallLifecycle(lifecycleRef, lifecycle)) {
+        if (
+          isCurrentCallLifecycle(lifecycleRef, lifecycle) &&
+          !leavingRef.current
+        ) {
+          leavingRef.current = true;
           call.leave().catch((error) => {
             console.error("Could not leave call:", error);
           });
@@ -65,10 +111,13 @@ const CallRoom = ({ call, friend, friendId, mode, ringOutcome }) => {
   }, [call]);
 
   const leaveCall = async () => {
+    if (leavingRef.current) return;
+    leavingRef.current = true;
     try {
       await call.leave();
       backToChat();
     } catch (error) {
+      leavingRef.current = false;
       console.error("Could not leave call:", error);
       toast.error("Could not leave the call cleanly.");
     }
@@ -102,12 +151,15 @@ const CallRoom = ({ call, friend, friendId, mode, ringOutcome }) => {
             </p>
             <CallControls
               onLeave={(error) => {
+                leavingRef.current = true;
                 if (error) {
                   toast.error("Call could not be disconnected cleanly.");
                 }
                 backToChat();
               }}
             />
+            <CallStatsButton />
+            <SwitchCameraButton call={call} mode={mode} />
           </footer>
         </main>
       </StreamCall>
@@ -125,10 +177,13 @@ const CallPage = () => {
   const mode = searchParams.get("mode") === "audio" ? "audio" : "video";
   const userId = authenticatedUser?._id?.toString();
   const [activeCall, setActiveCall] = useState(null);
+  const [callReady, setCallReady] = useState(false);
   const [callError, setCallError] = useState("");
   const [ringOutcome, setRingOutcome] = useState("");
   const [retry, setRetry] = useState(0);
   const operationKeyRef = useRef("");
+  const operationLifecycleRef = useRef(0);
+  const operationCleanupRef = useRef(null);
   const generatedCallIdRef = useRef("");
   const {
     data: friendsData,
@@ -157,8 +212,18 @@ const CallPage = () => {
       return undefined;
     }
 
+    const lifecycle = ++operationLifecycleRef.current;
     const operationKey = `${incomingCallId || friendIdFromUrl}:${mode}:${retry}`;
-    if (operationKeyRef.current === operationKey) return undefined;
+    if (operationKeyRef.current === operationKey) {
+      return () => {
+        queueMicrotask(() => {
+          if (isCurrentCallLifecycle(operationLifecycleRef, lifecycle)) {
+            operationCleanupRef.current?.();
+          }
+        });
+      };
+    }
+    operationCleanupRef.current?.();
     operationKeyRef.current = operationKey;
     let disposed = false;
     if (!incomingCallId && !generatedCallIdRef.current) {
@@ -168,6 +233,7 @@ const CallPage = () => {
     const callId = incomingCallId || generatedCallIdRef.current;
     const call = client.call("default", callId);
     setActiveCall(call);
+    setCallReady(false);
     setCallError("");
     setRingOutcome("");
 
@@ -205,41 +271,116 @@ const CallPage = () => {
           }
           reportOutcome("missed");
         });
+    const cleanupOperation = () => {
+      if (disposed) return;
+      disposed = true;
+      unsubscribeRejected?.();
+      unsubscribeMissed?.();
+      if (operationKeyRef.current === operationKey) {
+        operationKeyRef.current = "";
+      }
+      if (operationCleanupRef.current === cleanupOperation) {
+        operationCleanupRef.current = null;
+      }
+    };
+    operationCleanupRef.current = cleanupOperation;
 
     const connectCall = async () => {
       try {
         if (incomingCallId) {
           if (mode === "audio") await call.camera.disable();
           await call.join();
+        } else {
+          if (mode === "audio") await call.camera.disable();
+          await call.getOrCreate({
+            ring: true,
+            video: mode === "video",
+            data: {
+              members: [
+                { user_id: userId },
+                { user_id: friendIdFromUrl },
+              ],
+              custom: { mode },
+            },
+          });
+          if (disposed) {
+            await call.leave({ reject: true, reason: "cancel" });
+            return;
+          }
+          await call.join();
+        }
+
+        if (disposed) {
+          await call.leave({ reject: true, reason: "cancel" });
           return;
         }
 
-        if (mode === "audio") await call.camera.disable();
-        await call.getOrCreate({
-          ring: true,
-          video: mode === "video",
-          data: {
-            members: [
-              { user_id: userId },
-              { user_id: friendIdFromUrl },
-            ],
-            custom: { mode },
-          },
-        });
+        setCallReady(true);
+        const enableMedia = async (label, enable) => {
+          try {
+            await enable();
+          } catch (error) {
+            console.error(`Could not enable ${label}:`, error);
+            if (
+              error?.name === "NotAllowedError" ||
+              error?.name === "SecurityError"
+            ) {
+              toast.error(`Allow ${label} access in your browser settings to use it.`);
+            } else if (
+              error?.name === "NotFoundError" ||
+              error?.name === "DevicesNotFoundError"
+            ) {
+              toast.error(`No ${label} was found. Check that a device is connected.`);
+            } else {
+              toast.error(`${label[0].toUpperCase()}${label.slice(1)} could not be started.`);
+            }
+          }
+        };
+        const mediaTasks = [
+          enableMedia("microphone", () => call.microphone.enable()),
+        ];
+        if (mode === "video") {
+          mediaTasks.push(enableMedia("camera", () => call.camera.enable()));
+        }
+        await Promise.all(mediaTasks);
       } catch (error) {
+        try {
+          await call.leave({ reject: true, reason: "cancel" });
+        } catch (leaveError) {
+          console.error("Could not clean up the failed call:", leaveError);
+        }
         if (disposed) return;
         console.error("Could not start or join the call:", error);
-        setCallError(
-          "The call could not connect. Check your camera and microphone permissions, then try again.",
-        );
+        if (
+          error?.name === "NotAllowedError" ||
+          error?.name === "SecurityError"
+        ) {
+          setCallError(
+            "Browser access was denied. Allow microphone and camera access, then try again.",
+          );
+        } else if (
+          error?.name === "NotFoundError" ||
+          error?.name === "DevicesNotFoundError"
+        ) {
+          setCallError("No compatible microphone or camera was found.");
+        } else if (!globalThis.isSecureContext) {
+          setCallError("Calls require HTTPS. Open VibeTalk using a secure connection.");
+        } else {
+          setCallError(
+            error.response?.data?.message ||
+              "The call could not connect. Check your connection and try again.",
+          );
+        }
       }
     };
 
     connectCall();
     return () => {
-      disposed = true;
-      unsubscribeRejected?.();
-      unsubscribeMissed?.();
+      queueMicrotask(() => {
+        if (isCurrentCallLifecycle(operationLifecycleRef, lifecycle)) {
+          cleanupOperation();
+        }
+      });
     };
   }, [
     client,
@@ -375,7 +516,7 @@ const CallPage = () => {
     );
   }
 
-  if (!activeCall || callError) {
+  if (!activeCall || !callReady || callError) {
     return (
       <main className="video-call-page video-call-state-page">
         <section className="video-call-state-card" role={callError ? "alert" : undefined}>
@@ -404,9 +545,21 @@ const CallPage = () => {
               Try again
             </button>
           ) : (
-            <Link className="video-call-secondary-button" to="/chat">
+            <button
+              className="video-call-secondary-button"
+              type="button"
+              onClick={async () => {
+                try {
+                  await activeCall?.leave({ reject: true, reason: "cancel" });
+                } catch (error) {
+                  console.error("Could not cancel the call:", error);
+                  toast.error("Could not cancel the call cleanly.");
+                }
+                navigate("/chat");
+              }}
+            >
               Cancel
-            </Link>
+            </button>
           )}
         </section>
       </main>

@@ -12,11 +12,22 @@ import cors from 'cors';
 const app = express();//initialize express app hova ha 
 const PORT = process.env.PORT || 3000;// Set the port for the server
 
+const allowedOrigins = (
+  process.env.CLIENT_URL ||
+  process.env.CRIENT_URL ||
+  (process.env.NODE_ENV === "production" ? "" : "http://localhost:5173")
+)
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 // middleware ka setup
 app.use(cors({
-  origin: process.env.CRIENT_URL, //Allow request from client 
-  credentials:true, // Allow cookies to send 
-}))
+  origin: (origin, callback) => {
+    callback(null, !origin || allowedOrigins.includes(origin));
+  },
+  credentials: true,
+}));
 app.use(express.json()); // Parse incoming JSON requests
 app.use(cookieParser()); //  cookies from  middleware incoming requests
 

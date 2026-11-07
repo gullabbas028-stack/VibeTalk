@@ -17,6 +17,13 @@ Configure these environment variables in the Vercel project before deploying:
 - `JWT_SECRET`
 - `STREAM_API_KEY`
 - `STREAM_API_SECRET`
+- `CLIENT_URL` (optional; comma-separated origins for cross-origin clients)
 
 Email notifications are optional. To enable them, also set `RESEND_API_KEY` and
 `RESEND_FROM_EMAIL`.
+
+Calls use Stream Video's managed WebRTC signaling, media servers, TURN relay,
+and adaptive quality. Keep `STREAM_API_SECRET` only in the backend environment;
+the browser receives the public Stream API key and a user-scoped token from the
+authenticated `/api/chat/token` endpoint. No custom TURN credentials or
+persistent WebSocket server are needed for this architecture.
